@@ -1,0 +1,154 @@
+# ==============================================================================
+# 🌱 GreenOps - Comprehensive .gitignore
+# Ignoring Security-Critical Files, Secrets, Environment Configs & Build Artifacts
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Security, Credentials & Secrets (HIGHEST PRIORITY)
+# ------------------------------------------------------------------------------
+# Environment variables and secrets files
+.env
+.env.*
+*.env
+!.env.example
+!.env.template
+
+# API Keys, Tokens, and Secret Stores
+*secret*
+*secrets*
+*credential*
+*credentials*
+*token*
+*.token
+*api_key*
+*apikey*
+*.secret
+*.secrets
+*.keyfile
+
+# Cloud Provider Credentials & Service Accounts
+*service_account*.json
+*service-account*.json
+*firebase-adminsdk*.json
+credentials.json
+client_secret*.json
+.aws/
+.azure/
+.gcloud/
+
+# Cryptographic Keys, Certificates & SSH
+*.pem
+*.key
+*.pub
+*.pkcs12
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+*.csr
+*.keystore
+*.jks
+id_rsa
+id_rsa*
+id_ed25519
+id_ed25519*
+known_hosts
+
+# ------------------------------------------------------------------------------
+# 2. Database Files (Local databases containing user/runtime data)
+# ------------------------------------------------------------------------------
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+greenops.db
+postgres_data/
+redis_data/
+
+# ------------------------------------------------------------------------------
+# 3. Python Artifacts & Environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.tox/
+
+# ------------------------------------------------------------------------------
+# 4. Node.js & Next.js Artifacts
+# ------------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ------------------------------------------------------------------------------
+# 5. OS & Editor Artifacts
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Thumbs.db:encryptable
+
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+*.sublime-project

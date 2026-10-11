@@ -1,0 +1,45 @@
+name: GreenOps CI Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR Number to run tests for'
+        required: false
+        default: '1'
+      trigger_reason:
+        description: 'Reason for workflow trigger (e.g. GreenOps Deferred Execution)'
+        required: false
+        default: 'Manual Dispatch / GreenOps Scheduler'
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    name: Build and Test Suite
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          echo "Installing pipeline dependencies..."
+          sleep 3
+
+      - name: Execute Automated Test Suite
+        run: |
+          echo "Executing Unit and Integration Tests..."
+          sleep 5
+          echo "All tests passed successfully."
+
+      - name: GreenOps Completed Telemetry
+        if: always()
+        run: |
+          echo "🌱 CI Pipeline run completed. Ready for GreenOps workflow_run telemetry ingestion."

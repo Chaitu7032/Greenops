@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #070B09;
+    --foreground: #F3F4F6;
+    --card: #0E1513;
+    --card-foreground: #F3F4F6;
+    --border: #1C2A26;
+    --accent: #10B981;
+  }
+
+  body {
+    color: var(--foreground);
+    background-color: var(--background);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+}
+
+/* Tabular numbers for financial and telemetry metrics */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle atmospheric backdrop grid */
+.bg-grid-subtle {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(28, 42, 38, 0.25) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(28, 42, 38, 0.25) 1px, transparent 1px);
+}
+
+/* Clean scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070B09;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1C2A26;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2B3F39;
+}
+
+/* Card hover glow effect */
+.hover-card-glow {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.hover-card-glow:hover {
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 4px 20px -2px rgba(6, 78, 59, 0.25);
+}
+

@@ -1,0 +1,23 @@
+name: 'GreenOps CI/CD Gatekeeper'
+description: 'FinOps & Cloud Carbon Budget Gatekeeper integration for GitHub Actions'
+author: 'GreenOps SPM Team'
+
+inputs:
+  greenops_endpoint:
+    description: 'URL of the GreenOps backend API'
+    required: false
+    default: 'https://greenops-api.onrender.com'
+  urgency:
+    description: 'Urgency level of this PR execution (HOTFIX | BLOCKING | ROUTINE)'
+    required: false
+    default: 'ROUTINE'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: GreenOps Gatekeeper Check
+      shell: bash
+      run: |
+        echo "🌱 GreenOps Gatekeeper active..."
+        echo "Urgency level: ${{ inputs.urgency }}"
+        echo "Reporting to GreenOps platform: ${{ inputs.greenops_endpoint }}"
