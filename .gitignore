@@ -123,6 +123,11 @@ out/
 .turbo/
 .vercel/
 
+# TypeScript & Jest Build Artifacts
+*.tsbuildinfo
+coverage/
+*.lcov
+
 # Logs
 logs/
 *.log
