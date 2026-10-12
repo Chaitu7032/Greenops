@@ -6,7 +6,7 @@ from app.api.dependencies import get_db
 from app.models.deferred_job import DeferredJob
 from app.models.repository import Repository
 from app.schemas.deferred_job import DeferredJobResponse
-from app.services.github_service import github_service
+from app.services.scheduler_service import dispatch_single_job
 
 router = APIRouter(prefix="/api/v1/deferred-jobs", tags=["Deferred Jobs"])
 
@@ -42,29 +42,25 @@ def manually_dispatch_job(id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deferred job not found")
 
-    repo = db.query(Repository).filter(Repository.id == job.repository_id).first()
-    if not repo:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Repository not found")
+    if job.status in ("DISPATCHED", "COMPLETED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Job already in terminal or dispatched state: {job.status}"
+        )
 
-    workflow_file = f"{job.workflow_name.lower().replace(' ', '-')}.yml"
-    success = github_service.dispatch_workflow(
-        owner=repo.owner,
-        repo=repo.name,
-        workflow_id=workflow_file,
-        ref=job.target_ref,
-        inputs={"pr_number": str(job.pr_number), "trigger_reason": "Manual GreenOps Dispatch"}
+    dispatched_job = dispatch_single_job(
+        db=db,
+        job_id=job.id,
+        trigger_reason="Manual GreenOps REST Dispatch"
     )
 
-    if success:
-        job.status = "DISPATCHED"
-        job.attempts += 1
-    else:
-        job.attempts += 1
-        job.last_error = "Manual dispatch failed to trigger GitHub Actions"
+    if not dispatched_job:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job is currently claimed or locked by an active background worker."
+        )
 
-    db.commit()
-    db.refresh(job)
-
-    item = DeferredJobResponse.model_validate(job)
-    item.repository_name = repo.name
+    item = DeferredJobResponse.model_validate(dispatched_job)
+    repo = db.query(Repository).filter(Repository.id == dispatched_job.repository_id).first()
+    item.repository_name = repo.name if repo else None
     return item

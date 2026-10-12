@@ -13,29 +13,13 @@ from app.models import Organization, Repository, Sprint, PipelineRun, SprintBudg
 from app.core.config import settings
 from app.core.security import verify_github_signature
 
-# Integration Test in-memory DB with StaticPool
-engine = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base.metadata.create_all(bind=engine)
+from app.main import app
+from app.models import Organization, Repository, Sprint, PipelineRun, SprintBudgetLedger
+from app.core.config import settings
+from app.core.security import verify_github_signature
 
 
-def override_db():
-    db = TestingSession()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_db
-client = TestClient(app)
-
-
-def test_full_pipeline_end_to_end_flow():
+def test_full_pipeline_end_to_end_flow(client):
     # 1. Trigger Seed Endpoint
     seed_res = client.post("/api/v1/demo/seed")
     assert seed_res.status_code == 201
