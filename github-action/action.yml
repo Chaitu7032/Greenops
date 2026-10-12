@@ -1,5 +1,5 @@
-name: 'GreenOps CI/CD Gatekeeper'
-description: 'FinOps & Cloud Carbon Budget Gatekeeper integration for GitHub Actions'
+name: 'GreenOps CI/CD Gatekeeper & Telemetry Reporter'
+description: 'FinOps & Cloud Carbon Budget Gatekeeper integration and execution telemetry for GitHub Actions'
 author: 'GreenOps SPM Team'
 
 inputs:
@@ -7,17 +7,112 @@ inputs:
     description: 'URL of the GreenOps backend API'
     required: false
     default: 'https://greenops-api.onrender.com'
+  webhook_secret:
+    description: 'Shared HMAC-SHA256 webhook secret for authenticating telemetry to GreenOps'
+    required: false
+    default: ''
   urgency:
     description: 'Urgency level of this PR execution (HOTFIX | BLOCKING | ROUTINE)'
     required: false
     default: 'ROUTINE'
+  pr_number:
+    description: 'Associated GitHub Pull Request number (if triggered by PR)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
   steps:
-    - name: GreenOps Gatekeeper Check
+    - name: Record Execution Start Time
+      id: start-timer
       shell: bash
       run: |
+        START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
         echo "🌱 GreenOps Gatekeeper active..."
         echo "Urgency level: ${{ inputs.urgency }}"
-        echo "Reporting to GreenOps platform: ${{ inputs.greenops_endpoint }}"
+        echo "Run started at: $START_TIME"
+
+    - name: Post Execution Telemetry to GreenOps
+      if: always()
+      shell: bash
+      env:
+        GREENOPS_ENDPOINT: ${{ inputs.greenops_endpoint }}
+        WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+        START_TIME: ${{ steps.start-timer.outputs.start_time }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        CONCLUSION="${{ job.status }}"
+        # Normalize GitHub Action job.status to GitHub workflow conclusion
+        if [ "$CONCLUSION" = "success" ]; then
+          NORMALIZED_CONCLUSION="success"
+        elif [ "$CONCLUSION" = "cancelled" ]; then
+          NORMALIZED_CONCLUSION="cancelled"
+        else
+          NORMALIZED_CONCLUSION="failure"
+        fi
+
+        PR_NUM="${{ inputs.pr_number }}"
+        if [ -z "$PR_NUM" ] && [ -n "${{ github.event.pull_request.number }}" ]; then
+          PR_NUM="${{ github.event.pull_request.number }}"
+        fi
+
+        # Construct authoritative GitHub workflow_run payload
+        PAYLOAD=$(cat <<EOF
+        {
+          "action": "completed",
+          "workflow_run": {
+            "id": ${{ github.run_id }},
+            "name": "${{ github.workflow }}",
+            "head_sha": "${{ github.sha }}",
+            "conclusion": "$NORMALIZED_CONCLUSION",
+            "run_started_at": "$START_TIME",
+            "updated_at": "$END_TIME",
+            "actor": {
+              "login": "${{ github.actor }}"
+            },
+            "pull_requests": [
+              $([ -n "$PR_NUM" ] && echo "{\"number\": $PR_NUM}" || echo "")
+            ]
+          },
+          "repository": {
+            "id": ${{ github.repository_id }},
+            "name": "${{ github.event.repository.name || github.repository }}",
+            "full_name": "${{ github.repository }}",
+            "owner": {
+              "login": "${{ github.repository_owner }}"
+            }
+          }
+        }
+        EOF
+        )
+
+        TARGET_URL="${GREENOPS_ENDPOINT%/}/api/v1/webhooks/github"
+        DELIVERY_ID="telemetry-run-${{ github.run_id }}-${{ github.run_attempt || 1 }}"
+
+        echo "Posting execution telemetry to $TARGET_URL..."
+
+        # Compute HMAC-SHA256 signature if secret is provided
+        if [ -n "$WEBHOOK_SECRET" ]; then
+          SIGNATURE="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$TARGET_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: workflow_run" \
+            -H "X-GitHub-Delivery: $DELIVERY_ID" \
+            -H "X-Hub-Signature-256: $SIGNATURE" \
+            -d "$PAYLOAD")
+        else
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$TARGET_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: workflow_run" \
+            -H "X-GitHub-Delivery: $DELIVERY_ID" \
+            -d "$PAYLOAD")
+        fi
+
+        echo "GreenOps telemetry response HTTP status: $HTTP_STATUS"
+        if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+          echo "✅ GreenOps telemetry recorded successfully."
+        else
+          echo "⚠️ GreenOps telemetry reporting returned status $HTTP_STATUS (non-blocking)."
+        fi
