@@ -11,6 +11,7 @@ from app.models.repository import Repository
 from app.models.sprint import Sprint
 from app.models.pipeline_run import PipelineRun
 from app.models.deferred_job import DeferredJob
+from app.models.budget_ledger import SprintBudgetLedger
 from app.models.webhook_event import WebhookEvent
 from app.core.config import settings
 
@@ -298,3 +299,140 @@ def test_unregistered_repository_telemetry_handled_safely(client, db_session: Se
     assert data["status"] == "processed"
     # Skipped gracefully without crashing or database foreign key errors
     assert data["pipeline_run_id"] is None
+
+
+def test_cancelled_workflow_run_telemetry_persisted(client, db_session: Session, telemetry_setup):
+    org, sprint, repo = telemetry_setup
+
+    pipeline_run = PipelineRun(
+        repository_id=repo.id,
+        organization_id=org.id,
+        sprint_id=sprint.id,
+        pr_number=77,
+        commit_sha="cancelledsha",
+        workflow_name="CI",
+        execution_status="PENDING",
+    )
+    db_session.add(pipeline_run)
+    db_session.commit()
+
+    deferred_job = DeferredJob(
+        pipeline_run_id=pipeline_run.id,
+        repository_id=repo.id,
+        pr_number=77,
+        workflow_name="CI",
+        target_ref="main",
+        scheduled_for=pipeline_run.created_at,
+        reason="Carbon delay",
+        status="DISPATCHED",
+    )
+    db_session.add(deferred_job)
+    db_session.commit()
+
+    payload = {
+        "action": "completed",
+        "workflow_run": {
+            "id": 555666777,
+            "name": "CI",
+            "head_sha": "cancelledsha",
+            "conclusion": "cancelled",
+            "run_started_at": "2026-10-12T16:00:00Z",
+            "updated_at": "2026-10-12T16:01:00Z",
+            "actor": {"login": "ci-user"},
+            "pull_requests": [{"number": 77}],
+        },
+        "repository": {
+            "id": 778899,
+            "name": "ci-repo",
+            "full_name": "telemetry-owner/ci-repo",
+            "owner": {"login": "telemetry-owner"},
+        },
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    sig = compute_sig(body, settings.GITHUB_WEBHOOK_SECRET)
+    headers = {
+        "X-GitHub-Event": "workflow_run",
+        "X-GitHub-Delivery": "delivery-wf-cancelled",
+        "X-Hub-Signature-256": sig,
+    }
+
+    response = client.post("/api/v1/webhooks/github", content=body, headers=headers)
+    assert response.status_code == 200
+
+    db_session.refresh(pipeline_run)
+    db_session.refresh(deferred_job)
+    assert pipeline_run.execution_status == "CANCELLED"
+    assert deferred_job.status == "CANCELLED"
+    assert deferred_job.last_error == "Workflow run was cancelled on GitHub"
+
+
+def test_duplicate_telemetry_different_delivery_ids_prevents_double_billing(client, db_session: Session, telemetry_setup):
+    org, sprint, repo = telemetry_setup
+
+    pipeline_run = PipelineRun(
+        repository_id=repo.id,
+        organization_id=org.id,
+        sprint_id=sprint.id,
+        pr_number=88,
+        commit_sha="idempotent-sha88",
+        workflow_name="CI",
+        execution_status="PENDING",
+    )
+    db_session.add(pipeline_run)
+    db_session.commit()
+
+    payload = {
+        "action": "completed",
+        "workflow_run": {
+            "id": 999111222,
+            "name": "CI",
+            "head_sha": "idempotent-sha88",
+            "conclusion": "success",
+            "run_started_at": "2026-10-12T17:00:00Z",
+            "updated_at": "2026-10-12T17:02:00Z",  # 120 seconds
+            "actor": {"login": "ci-bot"},
+            "pull_requests": [{"number": 88}],
+        },
+        "repository": {
+            "id": 778899,
+            "name": "ci-repo",
+            "full_name": "telemetry-owner/ci-repo",
+            "owner": {"login": "telemetry-owner"},
+        },
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+    sig = compute_sig(body, settings.GITHUB_WEBHOOK_SECRET)
+
+    # First delivery via Action delivery ID
+    headers1 = {
+        "X-GitHub-Event": "workflow_run",
+        "X-GitHub-Delivery": "delivery-from-action-01",
+        "X-Hub-Signature-256": sig,
+    }
+    res1 = client.post("/api/v1/webhooks/github", content=body, headers=headers1)
+    assert res1.status_code == 200
+
+    # Second delivery via Native GitHub webhook delivery ID
+    headers2 = {
+        "X-GitHub-Event": "workflow_run",
+        "X-GitHub-Delivery": "delivery-from-native-webhook-02",
+        "X-Hub-Signature-256": sig,
+    }
+    res2 = client.post("/api/v1/webhooks/github", content=body, headers=headers2)
+    assert res2.status_code == 200
+
+    # Verify SprintBudgetLedger contains exactly ONE debit entry for this pipeline run
+    entries = (
+        db_session.query(SprintBudgetLedger)
+        .filter(
+            SprintBudgetLedger.sprint_id == sprint.id,
+            SprintBudgetLedger.pipeline_run_id == pipeline_run.id,
+            SprintBudgetLedger.entry_type == "ACTUAL_DEBIT",
+        )
+        .all()
+    )
+    assert len(entries) == 1
+    # Cost for 120 seconds (2 minutes * $0.008000) = $0.016000
+    assert entries[0].amount_usd == Decimal("0.016000")

@@ -337,7 +337,14 @@ def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str
     actual_carbon = calculate_carbon(actual_energy, pipeline_run.grid_intensity_gco2_kwh)
 
     # Terminal state reconciliation - do not regress if already completed
-    terminal_status = "COMPLETED" if conclusion == "success" else "FAILED"
+    if conclusion == "success":
+        terminal_status = "COMPLETED"
+    elif conclusion == "cancelled":
+        terminal_status = "CANCELLED"
+    else:
+        terminal_status = "FAILED"
+
+    # Terminal state reconciliation - do not regress if already completed
     if pipeline_run.execution_status != "COMPLETED" or terminal_status == "COMPLETED":
         pipeline_run.execution_status = terminal_status
 
@@ -357,6 +364,10 @@ def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str
     if deferred_job:
         if conclusion == "success":
             deferred_job.status = "COMPLETED"
+            deferred_job.last_error = None
+        elif conclusion == "cancelled":
+            deferred_job.status = "CANCELLED"
+            deferred_job.last_error = "Workflow run was cancelled on GitHub"
         else:
             deferred_job.status = "FAILED"
             deferred_job.last_error = f"Workflow run conclusion: {conclusion}"
