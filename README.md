@@ -112,7 +112,7 @@ Backend API will be live at `http://127.0.0.1:8000` (Docs: `http://127.0.0.1:800
 ### 4. Start Celery Worker (Optional for Deferred Jobs)
 ```bash
 cd backend
-celery -A app.workers.celery_app.celery_app worker --loglevel=info --beat
+3
 ```
 
 ### 5. Start Frontend Dashboard
