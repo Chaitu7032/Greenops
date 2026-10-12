@@ -7,7 +7,8 @@
 
 ### Terminal 1: Start Backend Server (FastAPI)
 ```powershell
-cd "e:\SPM project\backend"
+cd backend
+python -m alembic upgrade head
 python -m uvicorn app.main:app --reload --port 8000
 ```
 - **Live API Endpoint**: `http://127.0.0.1:8000`
@@ -16,7 +17,7 @@ python -m uvicorn app.main:app --reload --port 8000
 
 ### Terminal 2: Start Frontend Dashboard (Next.js 14)
 ```powershell
-cd "e:\SPM project\frontend"
+cd frontend
 npm run dev
 ```
 - **Live Dashboard**: `http://localhost:3000/dashboard`
@@ -27,7 +28,7 @@ npm run dev
 
 ### Terminal 3: Trigger Live Simulation Script (During Presentation)
 ```powershell
-cd "e:\SPM project\backend"
+cd backend
 python -u scripts/demo_runner.py
 ```
 
@@ -96,16 +97,28 @@ $$\text{CO}_2\text{e (grams)} = E (\text{kWh}) \times \text{Grid\_Carbon\_Intens
 > **Answer**: *"We implement a 3-tier fallback in our `grid_service.py`: First, it queries fresh Redis cache (60m TTL). Second, if the API fails, it uses stale Redis cache with a `stale=True` flag displayed on the UI. Third, it falls back to documented regional baseline averages. We never crash or fabricate ungrounded live data."*
 
 ### Q4: "How does deferred execution actually run on GitHub Actions?"
-> **Answer**: *"When a job is deferred, GreenOps creates a `DeferredJob` record. Our Celery worker polls for scheduled green windows. When the window opens, GreenOps dispatches the workflow via GitHub REST API (`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches`), which triggers the `.github/workflows/greenops-demo.yml` workflow."*
+> **Answer**: *"When a job is deferred, GreenOps creates a `DeferredJob` record. Our Celery worker polls for scheduled green windows. When the window opens, GreenOps dispatches the workflow via GitHub REST API (`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches`), which triggers the target workflow on GitHub."*
 
 ### Q5: "How does the PR comment not spam developer pull requests?"
 > **Answer**: *"We embed a hidden HTML marker `<!-- greenops-scorecard -->` inside our scorecard markdown. When a new commit or actual run finishes, our service queries existing issue comments, finds the comment with this anchor, and updates it in-place using a GitHub API `PATCH` request."*
+
+### Q6: "How do you prevent two background workers from claiming and dispatching the same deferred job simultaneously?"
+> **Answer**: *"We use an atomic compare-and-swap (CAS) conditional SQL update in `claim_deferred_job()`. A worker updates the job status to `SCHEDULED` only if its status is currently `PENDING` or stuck in `SCHEDULED` beyond a 5-minute timeout. Only the worker that gets `rows_updated == 1` proceeds with the GitHub dispatch. Stale claims are automatically recovered if a worker crashes midway."*
+
+### Q7: "How do you ensure financial budgets aren't debited twice if a webhook is redelivered?"
+> **Answer**: *"Beyond the webhook delivery ID check, we enforce ledger-level idempotency in `record_pipeline_ledger_entry()`. We check for existing entries matching `(sprint_id, pipeline_run_id, entry_type)`. If one exists, we update the recorded amounts rather than appending a duplicate debit row, guaranteeing financial integrity."*
+
+### Q8: "How is database schema evolution managed across local development and production?"
+> **Answer**: *"We use version-controlled Alembic migrations (`head: c341c4aec7e3`). In production, application startup strictly bypasses `Base.metadata.create_all()` and relies entirely on `alembic upgrade head`. Furthermore, our CI pipeline runs `alembic check` to automatically fail builds if developers modify SQLAlchemy models without generating a migration."*
+
+### Q9: "What testing and automated quality gates exist in the project?"
+> **Answer**: *"We have 37 backend tests in Pytest covering all engines, diff analyzers, scheduler concurrency, and end-to-end integration flows. On the frontend, we have 14 Jest/React Testing Library unit tests verifying component states and budget gauge thresholds, alongside strict TypeScript validation and production builds. Both run automatically in parallel on GitHub Actions via `.github/workflows/ci.yml`."*
 
 ---
 
 ## 📊 7. Step-by-Step Presentation Checklist
 
-1. [ ] Start Backend (`python -m uvicorn app.main:app --port 8000`).
+1. [ ] Start Backend (`python -m alembic upgrade head && python -m uvicorn app.main:app --port 8000`).
 2. [ ] Open Dashboard at `http://localhost:3000/dashboard`.
 3. [ ] Explain the **Problem Statement** & **Elevator Pitch**.
 4. [ ] Point out the **Sprint Financial & Carbon Budget Gauges**.
