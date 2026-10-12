@@ -19,9 +19,12 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB schemas for local SQLite or ensure tables exist
-    logger.info("Initializing database schemas...", db_url=settings.DATABASE_URL.split("@")[-1])
-    Base.metadata.create_all(bind=engine)
+    # In local development mode with sqlite, create tables if not present; in production, Alembic handles migrations.
+    if settings.ENVIRONMENT == "development" and settings.DATABASE_URL.startswith("sqlite"):
+        logger.info("Initializing database schemas for local development...", db_url=settings.DATABASE_URL.split("@")[-1])
+        Base.metadata.create_all(bind=engine)
+    else:
+        logger.info("Running in production/managed mode. Database schema evolution managed via Alembic migrations.")
     logger.info("GreenOps backend server started successfully.", version="0.1.0")
     yield
     logger.info("Shutting down GreenOps backend server...")
