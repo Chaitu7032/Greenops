@@ -11,9 +11,15 @@ import json
 import time
 import httpx
 import sys
+import os
 
-API_BASE = "http://127.0.0.1:8000"
-WEBHOOK_SECRET = "demo_webhook_secret_for_development_32_chars"
+try:
+    from app.core.config import settings
+    API_BASE = f"http://127.0.0.1:{settings.PORT}"
+    WEBHOOK_SECRET = settings.GITHUB_WEBHOOK_SECRET
+except Exception:
+    API_BASE = "http://127.0.0.1:8000"
+    WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "5349be7d20cd439ba3ec1147676409fd")
 
 
 def print_banner():

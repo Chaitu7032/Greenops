@@ -48,13 +48,20 @@ export function formatDuration(seconds: number | string | null | undefined): str
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "N/A";
   try {
-    const d = new Date(dateStr);
+    // SQLite stores UTC datetime without trailing 'Z' (e.g. 2026-10-26T06:15:47.054)
+    // If no timezone offset (+ or Z) is present, parse explicitly as UTC
+    let parseable = dateStr;
+    if (!parseable.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(parseable)) {
+      parseable = parseable + "Z";
+    }
+    const d = new Date(parseable);
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      second: "2-digit",
+      hour12: true,
     }).format(d);
   } catch {
     return dateStr;
