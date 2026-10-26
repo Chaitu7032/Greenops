@@ -15,15 +15,17 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
+import { LeafProgress } from "@/components/ui/LeafProgress";
+
 export default function PipelinesPage() {
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [filterDecision, setFilterDecision] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
-  const loadPipelines = async () => {
+  const loadPipelines = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await api.getPipelines({
         policy_decision: filterDecision || undefined,
         limit: 100,
@@ -32,12 +34,16 @@ export default function PipelinesPage() {
     } catch (e) {
       console.error("Error loading pipelines:", e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadPipelines();
+    const interval = setInterval(() => {
+      loadPipelines(true);
+    }, 8000);
+    return () => clearInterval(interval);
   }, [filterDecision]);
 
   // Client-side text search filter
@@ -82,7 +88,7 @@ export default function PipelinesPage() {
         </div>
 
         <button
-          onClick={loadPipelines}
+          onClick={() => loadPipelines()}
           disabled={loading}
           className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-surface-card border border-surface-border hover:bg-surface-hover text-xs font-semibold text-zinc-300 shadow-sm transition-all"
         >
@@ -201,7 +207,13 @@ export default function PipelinesPage() {
       </div>
 
       {/* Table */}
-      <PipelineTable runs={filteredRuns} title="Filtered CI/CD Pipeline Runs" showAllLink={false} />
+      {loading && runs.length === 0 ? (
+        <div className="py-20 flex flex-col items-center justify-center">
+          <LeafProgress size={80} label="Loading Telemetry Runs..." sublabel="Fetching audit records from PostgreSQL / SQLite" />
+        </div>
+      ) : (
+        <PipelineTable runs={filteredRuns} title="Filtered CI/CD Pipeline Runs" showAllLink={false} />
+      )}
     </div>
   );
 }

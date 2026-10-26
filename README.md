@@ -131,13 +131,38 @@ curl -X POST http://localhost:8000/api/v1/demo/seed
 
 ---
 
-## 🧪 Testing Suite
+## 🧪 Testing & Verification Suite
 
-Run full automated unit and integration tests with coverage:
+GreenOps enforces rigorous quality gates across backend services, database migrations, and frontend components:
+
+### Backend Tests (Pytest)
+Run the full 37-test suite covering cost/carbon engines, diff classifiers, scheduler concurrency, webhook HMAC validation, and end-to-end integration:
 ```bash
 cd backend
-python -m pytest --cov=app tests/ -v
+python -m pytest -v
 ```
+
+### Database Migration Verification (Alembic)
+Verify schema synchronization and detect any model/database drift:
+```bash
+cd backend
+python -m alembic heads
+python -m alembic check
+```
+
+### Frontend Tests & Type Checking (Jest & TypeScript)
+Execute component unit tests, strict TypeScript validation, and production build checks:
+```bash
+cd frontend
+npm test               # Run Jest unit test suites
+npx tsc --noEmit       # Strict TypeScript type checking
+npm run build          # Production Next.js bundle compilation
+```
+
+### Automated CI Quality Gates (GitHub Actions)
+All pull requests and main branch commits are evaluated by `.github/workflows/ci.yml`:
+- Parallel execution of **Backend CI** (PostgreSQL 16 container, `alembic upgrade head`, `alembic check`, `pytest`) and **Frontend CI** (`npm ci`, `jest`, `tsc`, `next build`).
+- Consolidated branch protection gatekeeper job (`ci-gatekeeper`).
 
 ---
 

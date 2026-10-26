@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.base import Base
+from app.models import DeferredJob, PipelineRun, Repository, Organization  # register models on Base.metadata
 from app.api.dependencies import get_db
 
 # Shared in-memory test SQLite database with StaticPool

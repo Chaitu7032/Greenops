@@ -34,6 +34,7 @@ import { CarbonTrendChart } from "@/components/dashboard/CarbonTrendChart";
 import { PipelineTable } from "@/components/pipelines/PipelineTable";
 import { RepoTable } from "@/components/repositories/RepoTable";
 import { formatCurrency, formatCarbon } from "@/lib/formatters";
+import { LeafProgress } from "@/components/ui/LeafProgress";
 
 export default function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
@@ -45,9 +46,9 @@ export default function DashboardPage() {
   const [seeding, setSeeding] = useState(false);
   const [activeSprintName, setActiveSprintName] = useState("Active Sprint");
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const [ov, rank, carb, runs, sprints] = await Promise.all([
         api.getDashboardOverview(),
         api.getRepositoryRankings(),
@@ -70,12 +71,16 @@ export default function DashboardPage() {
     } catch (err) {
       console.error("Error loading dashboard data:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadData();
+    const interval = setInterval(() => {
+      loadData(true);
+    }, 8000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleSeedDemo = async () => {
@@ -127,7 +132,7 @@ export default function DashboardPage() {
           {/* Quick Actions & Live Telemetry Button */}
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={loadData}
+              onClick={() => loadData()}
               disabled={loading}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface-muted/90 hover:bg-surface-hover border border-surface-border text-xs font-semibold text-zinc-200 transition-all shadow-sm"
             >
@@ -156,8 +161,15 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Top 4 KPI Metric Cards with Sparklines */}
-      {overview && (
+      {/* LeafProgress Loading Animation */}
+      {loading && !overview ? (
+        <div className="py-20 flex flex-col items-center justify-center">
+          <LeafProgress size={88} label="Synchronizing SPM Telemetry..." sublabel="Connecting to SQLite ledger & live grid intensity" />
+        </div>
+      ) : (
+        <>
+          {/* Top 4 KPI Metric Cards */}
+          {overview && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             title="CI/CD Pipelines Evaluated"
@@ -166,8 +178,7 @@ export default function DashboardPage() {
             icon={GitPullRequest}
             badgeText="Automated Gate"
             badgeType="success"
-            sparklineData={[4, 8, 12, 10, 16, 20, overview.total_runs_count]}
-            trend={{ value: "+18% throughput", label: "vs baseline" }}
+            progress={overview.total_runs_count > 0 ? (overview.approved_runs_count / overview.total_runs_count) * 100 : 0}
           />
 
           <StatCard
@@ -177,8 +188,7 @@ export default function DashboardPage() {
             icon={DollarSign}
             badgeText="Avoided Spend"
             badgeType="success"
-            sparklineData={[2, 5, 9, 14, 18, 22, 24]}
-            trend={{ value: "-22% CI Spend", label: "cost saved" }}
+            progress={Math.min(100, Math.max(5, Number(overview.financial_percentage)))}
           />
 
           <StatCard
@@ -188,8 +198,7 @@ export default function DashboardPage() {
             icon={Leaf}
             badgeText="Clean Energy"
             badgeType="success"
-            sparklineData={[1, 3, 6, 9, 13, 17, 21]}
-            trend={{ value: "-31% CO₂e", label: "emissions reduced" }}
+            progress={Math.min(100, Math.max(5, Number(overview.carbon_percentage)))}
           />
 
           <StatCard
@@ -245,6 +254,8 @@ export default function DashboardPage() {
 
       {/* Live CI/CD Pipeline Telemetry Audit Table */}
       <PipelineTable runs={recentRuns} />
+        </>
+      )}
     </div>
   );
 }

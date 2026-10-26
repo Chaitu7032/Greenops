@@ -12,26 +12,8 @@ from app.db.base import Base
 from app.api.dependencies import get_db
 from app.core.config import settings
 
-# Test DB with StaticPool for in-memory SQLite shared across connections
-engine = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base.metadata.create_all(bind=engine)
-
-
-def override_db():
-    db = TestingSession()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_db
-client = TestClient(app)
+from app.main import app
+from app.core.config import settings
 
 
 def compute_signature(payload_bytes: bytes, secret: str) -> str:
@@ -39,7 +21,7 @@ def compute_signature(payload_bytes: bytes, secret: str) -> str:
     return f"sha256={mac.hexdigest()}"
 
 
-def test_webhook_hmac_verification_and_pr_ingestion():
+def test_webhook_hmac_verification_and_pr_ingestion(client):
     payload = {
         "action": "opened",
         "pull_request": {
@@ -80,7 +62,7 @@ def test_webhook_hmac_verification_and_pr_ingestion():
     assert replay_data["status"] == "idempotent_skip"
 
 
-def test_webhook_invalid_signature_rejected():
+def test_webhook_invalid_signature_rejected(client):
     body = b'{"action": "ping"}'
     headers = {
         "X-GitHub-Event": "ping",

@@ -23,6 +23,16 @@ REGIONAL_BASELINE_INTENSITY: Dict[str, Decimal] = {
     "DEFAULT": Decimal("350.00"),
 }
 
+# Mapping cloud runner region names to Electricity Maps zone codes
+ELECTRICITY_MAPS_ZONE_MAPPING: Dict[str, str] = {
+    "US-EAST": "US-MIDA-PJM",
+    "US-WEST": "US-CAL-CISO",
+    "EU-WEST": "DE",
+    "EU-NORTH": "SE",
+    "AP-SOUTH": "IN-NO",
+    "AP-SOUTHEAST": "SG",
+}
+
 
 class GridReadingResult:
     def __init__(
@@ -97,7 +107,8 @@ def get_grid_intensity(region: str = "US-EAST") -> GridReadingResult:
     # 2. Query Electricity Maps API
     if settings.ELECTRICITY_MAPS_API_KEY and settings.ELECTRICITY_MAPS_API_KEY != "mock_electricity_maps_key":
         try:
-            url = f"https://api.electricitymap.org/v3/carbon-intensity/latest?zone={region}"
+            query_zone = ELECTRICITY_MAPS_ZONE_MAPPING.get(region.upper(), region)
+            url = f"https://api.electricitymap.org/v3/carbon-intensity/latest?zone={query_zone}"
             headers = {"auth-token": settings.ELECTRICITY_MAPS_API_KEY}
             with httpx.Client(timeout=4.0) as client:
                 res = client.get(url, headers=headers)
@@ -116,6 +127,8 @@ def get_grid_intensity(region: str = "US-EAST") -> GridReadingResult:
                         source="electricity_maps_api",
                         stale=False,
                     )
+                else:
+                    logger.warning("Electricity Maps API non-200 response", status=res.status_code, body=res.text)
         except Exception as api_err:
             logger.warning("Electricity Maps API failed or timed out", error=str(api_err))
 

@@ -14,13 +14,12 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+db_url = config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -32,11 +31,11 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     connect_args = {}
-    if settings.DATABASE_URL.startswith("sqlite"):
+    if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     configuration = config.get_section(config.config_ini_section) or {}
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    configuration["sqlalchemy.url"] = db_url
 
     connectable = engine_from_config(
         configuration,

@@ -93,10 +93,41 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     deferred_runs = db.query(PipelineRun).filter(PipelineRun.policy_decision == "DEFERRED").count()
     flagged_runs = db.query(PipelineRun).filter(PipelineRun.policy_decision == "FLAGGED").count()
 
-    # Savings calculation from deferrals: each deferred execution saved delta between peak (e.g. 420g) and off-peak (210g)
-    deferred_count = db.query(DeferredJob).filter(DeferredJob.status.in_(["DISPATCHED", "COMPLETED"])).count()
-    est_savings_usd = Decimal(str(deferred_count * 0.045))  # compute resource optimization
-    carbon_avoided_kg = Decimal(str(deferred_count * 0.35))  # 350g CO2 avoided per shifted run
+    # Real FinOps and Carbon savings calculation dynamically computed from real pipeline runs:
+    # 1. Runs deferred to green window: energy_kwh * (current_peak_grid_intensity - off_peak_target_grid_intensity)
+    # 2. Prevented / flagged unnecessary runs that avoided wasteful cloud compute spend
+    deferred_runs_records = (
+        db.query(PipelineRun)
+        .filter(PipelineRun.policy_decision == "DEFERRED")
+        .all()
+    )
+    
+    total_carbon_avoided_g = Decimal("0")
+    total_savings_usd_calc = Decimal("0")
+    for dr in deferred_runs_records:
+        energy = dr.actual_energy_kwh or dr.estimated_energy_kwh or Decimal("0")
+        intensity = dr.grid_intensity_gco2_kwh or Decimal("380.00")
+        # Typical green off-peak window is <= 210 gCO2/kWh
+        green_delta = max(Decimal("0"), intensity - Decimal("210.00"))
+        carbon_saved_for_run = energy * green_delta
+        total_carbon_avoided_g += carbon_saved_for_run
+        
+        # Shifted runner spot-instance / off-peak pricing savings (~15% of compute cost)
+        run_cost = dr.actual_cost_usd or dr.estimated_cost_usd or Decimal("0")
+        total_savings_usd_calc += run_cost * Decimal("0.15")
+
+    # If flagged/blocked runs prevented execution entirely, add their full compute and carbon
+    blocked_runs = (
+        db.query(PipelineRun)
+        .filter(PipelineRun.policy_decision == "FLAGGED", PipelineRun.execution_status == "PENDING")
+        .all()
+    )
+    for br in blocked_runs:
+        total_savings_usd_calc += br.estimated_cost_usd or Decimal("0")
+        total_carbon_avoided_g += br.estimated_carbon_g or Decimal("0")
+
+    carbon_avoided_kg = round(total_carbon_avoided_g / Decimal("1000"), 4)
+    est_savings_usd = round(total_savings_usd_calc, 4)
 
     grid_info = get_grid_intensity("US-EAST")
 

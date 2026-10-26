@@ -8,6 +8,7 @@ from app.models.organization import Organization
 from app.models.repository import Repository
 from app.models.sprint import Sprint
 from app.models.pipeline_run import PipelineRun
+from app.models.deferred_job import DeferredJob
 from app.services.diff_analyzer import analyze_pr_diff
 from app.services.duration_estimator import estimate_duration
 from app.services.cost_engine import calculate_compute_cost
@@ -221,54 +222,102 @@ def process_pull_request_event(db: Session, payload: Dict[str, Any]) -> Dict[str
     }
 
 
+def parse_workflow_duration(wf_run: Dict[str, Any]) -> Decimal:
+    """
+    Parse actual elapsed duration in seconds from GitHub workflow_run payload.
+    Uses run_started_at / created_at and updated_at. Defaults to 0.00 if missing or invalid.
+    """
+    created_at_str = wf_run.get("run_started_at") or wf_run.get("created_at")
+    updated_at_str = wf_run.get("updated_at")
+
+    if created_at_str and updated_at_str:
+        try:
+            start_t = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+            end_t = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+            diff_s = (end_t - start_t).total_seconds()
+            if diff_s >= 0:
+                return Decimal(str(round(diff_s, 2)))
+        except Exception as e:
+            logger.warning("Error parsing workflow duration timestamps", error=str(e))
+
+    return Decimal("0.00")
+
+
 def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle GitHub `workflow_run` completed event to capture actual execution telemetry.
+    Reconciles actual runtime against pre-run estimates, updates budget ledger,
+    transitions associated deferred jobs, and refreshes PR scorecard comments with variance.
     """
     wf_run = payload.get("workflow_run", {})
     repo_data = payload.get("repository", {})
 
     run_id = wf_run.get("id")
     head_sha = wf_run.get("head_sha", "")
-    conclusion = wf_run.get("conclusion", "success")
-    created_at_str = wf_run.get("run_started_at") or wf_run.get("created_at")
-    updated_at_str = wf_run.get("updated_at")
+    conclusion = wf_run.get("conclusion", "success")  # success, failure, cancelled, timed_out, etc.
+    workflow_name = wf_run.get("name", "CI")
 
-    # Calculate actual duration
-    actual_seconds = Decimal("120.00")
-    if created_at_str and updated_at_str:
-        try:
-            start_t = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-            end_t = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
-            diff_s = (end_t - start_t).total_seconds()
-            if diff_s > 0:
-                actual_seconds = Decimal(str(round(diff_s, 2)))
-        except Exception:
-            pass
+    # Authoritative elapsed duration calculation
+    actual_seconds = parse_workflow_duration(wf_run)
 
-    full_name = repo_data.get("full_name", "")
-    repo = db.query(Repository).filter(Repository.full_name == full_name).first()
+    # Correlate repository: by github_repo_id first, fallback to full_name
+    github_repo_id = repo_data.get("id")
+    repo = None
+    if github_repo_id:
+        repo = db.query(Repository).filter(Repository.github_repo_id == github_repo_id).first()
     if not repo:
-        return {"status": "skipped", "reason": "Repository not found"}
+        full_name = repo_data.get("full_name", "")
+        repo = db.query(Repository).filter(Repository.full_name == full_name).first()
 
-    # Find matching pipeline run by commit SHA
-    pipeline_run = (
-        db.query(PipelineRun)
-        .filter(
+    if not repo:
+        logger.warning("Received workflow_run for unregistered repository", repo=repo_data.get("full_name"))
+        return {"status": "skipped", "reason": "Repository not registered in GreenOps"}
+
+    # Correlate PR number from pull_requests list if available
+    pr_number = None
+    prs = wf_run.get("pull_requests", [])
+    if prs and isinstance(prs, list) and len(prs) > 0:
+        pr_number = prs[0].get("number")
+
+    # Correlate matching PipelineRun:
+    # 1. Match by run_id if previously set
+    # 2. Or by repository_id and commit_sha
+    pipeline_run = None
+    if run_id:
+        pipeline_run = db.query(PipelineRun).filter(
             PipelineRun.repository_id == repo.id,
-            PipelineRun.commit_sha == head_sha
-        )
-        .first()
-    )
+            PipelineRun.run_id == run_id
+        ).first()
 
+    if not pipeline_run and head_sha:
+        pipeline_run = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.repository_id == repo.id,
+                PipelineRun.commit_sha == head_sha
+            )
+            .order_by(PipelineRun.created_at.desc())
+            .first()
+        )
+
+    # If no existing pre-run estimate exists, create new PipelineRun record
     if not pipeline_run:
-        # Create pipeline run entry for direct workflow runs
+        # Check active sprint for org
+        active_sprint = (
+            db.query(Sprint)
+            .filter(Sprint.organization_id == repo.organization_id, Sprint.status == "ACTIVE")
+            .first()
+        )
+        sprint_id = active_sprint.id if active_sprint else None
+
         pipeline_run = PipelineRun(
             repository_id=repo.id,
             organization_id=repo.organization_id,
-            commit_sha=head_sha,
+            sprint_id=sprint_id,
+            pr_number=pr_number,
+            commit_sha=head_sha or "unknown",
             author=wf_run.get("actor", {}).get("login", "unknown"),
-            workflow_name=wf_run.get("name", "CI"),
+            workflow_name=workflow_name,
             trigger_type="workflow_run",
             grid_region=repo.runner_region,
             grid_intensity_gco2_kwh=Decimal("300.00"),
@@ -277,7 +326,7 @@ def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str
         db.commit()
         db.refresh(pipeline_run)
 
-    # Compute actual telemetry
+    # Compute actual FinOps compute cost, power energy, and carbon emissions
     actual_cost = calculate_compute_cost(actual_seconds, repo.cost_per_minute)
     actual_energy = calculate_energy(
         duration_seconds=actual_seconds,
@@ -287,14 +336,44 @@ def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str
     )
     actual_carbon = calculate_carbon(actual_energy, pipeline_run.grid_intensity_gco2_kwh)
 
+    # Terminal state reconciliation - do not regress if already completed
+    if conclusion == "success":
+        terminal_status = "COMPLETED"
+    elif conclusion == "cancelled":
+        terminal_status = "CANCELLED"
+    else:
+        terminal_status = "FAILED"
+
+    # Terminal state reconciliation - do not regress if already completed
+    if pipeline_run.execution_status != "COMPLETED" or terminal_status == "COMPLETED":
+        pipeline_run.execution_status = terminal_status
+
     pipeline_run.run_id = run_id
     pipeline_run.actual_duration_seconds = actual_seconds
     pipeline_run.actual_cost_usd = actual_cost
     pipeline_run.actual_energy_kwh = actual_energy
     pipeline_run.actual_carbon_g = actual_carbon
-    pipeline_run.execution_status = "COMPLETED" if conclusion == "success" else "FAILED"
+    pipeline_run.updated_at = datetime.now(timezone.utc)
 
-    # Record actual expenditure in Sprint Budget Ledger
+    # Reconcile associated DeferredJob if one exists for this pipeline_run
+    deferred_job = (
+        db.query(DeferredJob)
+        .filter(DeferredJob.pipeline_run_id == pipeline_run.id)
+        .first()
+    )
+    if deferred_job:
+        if conclusion == "success":
+            deferred_job.status = "COMPLETED"
+            deferred_job.last_error = None
+        elif conclusion == "cancelled":
+            deferred_job.status = "CANCELLED"
+            deferred_job.last_error = "Workflow run was cancelled on GitHub"
+        else:
+            deferred_job.status = "FAILED"
+            deferred_job.last_error = f"Workflow run conclusion: {conclusion}"
+        deferred_job.updated_at = datetime.now(timezone.utc)
+
+    # Record actual expenditure in Sprint Budget Ledger (avoid double billing if run_id already debited)
     if pipeline_run.sprint_id:
         record_pipeline_ledger_entry(
             db=db,
@@ -308,19 +387,31 @@ def process_workflow_run_event(db: Session, payload: Dict[str, Any]) -> Dict[str
     db.commit()
     db.refresh(pipeline_run)
 
-    # Update PR scorecard with Actuals & Variance if PR number exists
-    if pipeline_run.pr_number and repo.owner and repo.name:
+    # Update GitHub PR scorecard in-place with telemetry variance
+    resolved_pr = pr_number or pipeline_run.pr_number
+    if resolved_pr and repo.owner and repo.name:
         sprint_summary = get_sprint_budget_summary(db, pipeline_run.sprint_id) if pipeline_run.sprint_id else None
         updated_scorecard = generate_pr_scorecard_markdown(
             pipeline_run=pipeline_run,
             sprint_summary=sprint_summary,
             is_actual=True,
         )
-        github_service.post_or_update_pr_comment(repo.owner, repo.name, pipeline_run.pr_number, updated_scorecard)
+        github_service.post_or_update_pr_comment(repo.owner, repo.name, resolved_pr, updated_scorecard)
+
+    logger.info(
+        "Recorded GitHub Actions actual execution telemetry",
+        run_id=run_id,
+        duration_s=float(actual_seconds),
+        status=pipeline_run.execution_status,
+        cost_usd=float(actual_cost),
+        carbon_g=float(actual_carbon),
+    )
 
     return {
         "status": "completed",
         "pipeline_run_id": pipeline_run.id,
+        "run_id": run_id,
+        "execution_status": pipeline_run.execution_status,
         "actual_duration_seconds": float(actual_seconds),
         "actual_cost_usd": float(actual_cost),
         "actual_carbon_g": float(actual_carbon),

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.base import Base
 from app.api.dependencies import get_db
-from app.models import Organization, Repository, Sprint, PipelineRun, Policy, WebhookEvent
+from app.models import Organization, Repository, Sprint, PipelineRun, Policy, WebhookEvent, DeferredJob
 
 # Use in-memory SQLite for testing
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
@@ -24,18 +24,16 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-client = TestClient(app)
-
-
 def test_healthz():
-    response = client.get("/healthz")
+    local_client = TestClient(app)
+    response = local_client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
 def test_ready():
-    response = client.get("/ready")
+    local_client = TestClient(app)
+    response = local_client.get("/ready")
     assert response.status_code == 200
     assert response.json()["status"] in ["ready", "degraded"]
     assert response.json()["database"] is True

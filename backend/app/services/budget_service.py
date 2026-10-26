@@ -81,14 +81,29 @@ def record_pipeline_ledger_entry(
     carbon_g: Decimal,
     entry_type: str = "ACTUAL_DEBIT"
 ) -> SprintBudgetLedger:
-    ledger_entry = SprintBudgetLedger(
-        sprint_id=sprint_id,
-        pipeline_run_id=pipeline_run_id,
-        amount_usd=amount_usd,
-        carbon_g=carbon_g,
-        entry_type=entry_type,
+    # Idempotency check: prevent duplicate debit if same pipeline run and entry type already exists
+    ledger_entry = (
+        db.query(SprintBudgetLedger)
+        .filter(
+            SprintBudgetLedger.sprint_id == sprint_id,
+            SprintBudgetLedger.pipeline_run_id == pipeline_run_id,
+            SprintBudgetLedger.entry_type == entry_type,
+        )
+        .first()
     )
-    db.add(ledger_entry)
+    if ledger_entry:
+        ledger_entry.amount_usd = amount_usd
+        ledger_entry.carbon_g = carbon_g
+    else:
+        ledger_entry = SprintBudgetLedger(
+            sprint_id=sprint_id,
+            pipeline_run_id=pipeline_run_id,
+            amount_usd=amount_usd,
+            carbon_g=carbon_g,
+            entry_type=entry_type,
+        )
+        db.add(ledger_entry)
+
     db.commit()
     db.refresh(ledger_entry)
     return ledger_entry

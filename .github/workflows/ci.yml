@@ -1,0 +1,156 @@
+name: GreenOps CI Quality Gates
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Backend Test & Migration Validation Job
+  # ---------------------------------------------------------------------------
+  backend-ci:
+    name: Backend CI & Database Migrations
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: greenops_ci_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Validate Alembic Migration History (Single Head)
+        working-directory: ./backend
+        run: |
+          echo "Checking Alembic migration history..."
+          HEADS_COUNT=$(python -m alembic heads | wc -l)
+          if [ "$HEADS_COUNT" -ne 1 ]; then
+            echo "❌ Error: Multiple or zero Alembic migration heads detected!"
+            python -m alembic heads
+            exit 1
+          fi
+          echo "✅ Single authoritative Alembic migration head verified:"
+          python -m alembic heads
+
+      - name: Verify Fresh Database Migration on PostgreSQL
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/greenops_ci_test
+        run: |
+          echo "Upgrading fresh PostgreSQL database to Alembic head..."
+          python -m alembic upgrade head
+          echo "Verifying current PostgreSQL revision..."
+          python -m alembic current
+
+      - name: Verify Schema Consistency (Check for Undetected Drift)
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/greenops_ci_test
+        run: |
+          echo "Checking for schema drift between SQLAlchemy models and PostgreSQL database..."
+          python -m alembic check
+
+      - name: Run Complete Pytest Suite
+        working-directory: ./backend
+        env:
+          DATABASE_URL: sqlite:///./greenops_test.db
+          ENVIRONMENT: development
+          GITHUB_WEBHOOK_SECRET: demo_webhook_secret_for_development_32_chars
+          GITHUB_TOKEN: ghp_dummy_token_for_testing
+          ELECTRICITY_MAPS_API_KEY: mock_electricity_maps_key
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          echo "Running pytest suite with coverage..."
+          python -m pytest -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # 2. Frontend Test, Typecheck & Production Build Job
+  # ---------------------------------------------------------------------------
+  frontend-ci:
+    name: Frontend Quality & Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Frontend Dependencies (Clean Reproducible Install)
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run Frontend Component Tests (Jest)
+        working-directory: ./frontend
+        run: npm test
+
+      - name: Run TypeScript Strict Type Check
+        working-directory: ./frontend
+        run: npx tsc --noEmit
+
+      - name: Run Next.js Production Build
+        working-directory: ./frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # 3. Final Gatekeeper Status Check
+  # ---------------------------------------------------------------------------
+  ci-gatekeeper:
+    name: GreenOps Quality Gate Summary
+    needs: [backend-ci, frontend-ci]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Evaluate Pipeline Status
+        run: |
+          if [ "${{ needs.backend-ci.result }}" != "success" ]; then
+            echo "❌ Backend CI failed!"
+            exit 1
+          fi
+          if [ "${{ needs.frontend-ci.result }}" != "success" ]; then
+            echo "❌ Frontend CI failed!"
+            exit 1
+          fi
+          echo "🎉 All GreenOps Quality Gates (Backend, PostgreSQL Migrations, Frontend Tests, Typecheck, Build) passed successfully!"
